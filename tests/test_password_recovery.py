@@ -30,6 +30,11 @@ class FormRequest:
 
 class RecoveryTests(unittest.TestCase):
     def setUp(self):
+        # Quart 0.17 needs a current loop when constructed on Python 3.9.
+        self.loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.loop)
+        self.addCleanup(asyncio.set_event_loop, None)
+        self.addCleanup(self.loop.close)
         self.db = peewee.SqliteDatabase(":memory:")
         self.addCleanup(self.db.close)
         self.bind = self.db.bind_ctx([User, PasswordReset], bind_refs=False, bind_backrefs=False)
@@ -66,7 +71,7 @@ class RecoveryTests(unittest.TestCase):
 
     def call(self, function, *args, **form):
         with patch.object(routes, "request", FormRequest(**form)):
-            return asyncio.run(function(*args))
+            return self.loop.run_until_complete(function(*args))
 
     def reset(self, token, password="new-password"):
         return self.call(routes.reset, token, password=password, password_confirm=password)
@@ -177,25 +182,25 @@ class RecoveryTests(unittest.TestCase):
 
     def test_delivery_failure_releases_request_capacity(self):
         with patch.object(routes, "send_mail", AsyncMock(side_effect=OSError("SMTP failure"))):
-            asyncio.run(routes.send_reset_mail(self.user.mail))
+            self.loop.run_until_complete(routes.send_reset_mail(self.user.mail))
         self.assertEqual(PasswordReset.select().count(), 0)
 
     def test_background_mail_uses_local_path_and_configured_domain(self):
         with patch.object(routes, "send_mail", AsyncMock()) as send:
-            asyncio.run(routes.send_reset_mail(self.user.mail))
+            self.loop.run_until_complete(routes.send_reset_mail(self.user.mail))
         self.assertIn("https://funding.example/auth/reset/token", send.call_args.args[2])
         self.assertEqual(routes.url_for.call_args.kwargs["_external"], False)
 
     def test_unknown_disabled_and_openid_accounts_do_not_receive_mail(self):
         with patch.object(routes, "send_mail", AsyncMock()) as send:
-            asyncio.run(routes.send_reset_mail("missing@example.com"))
+            self.loop.run_until_complete(routes.send_reset_mail("missing@example.com"))
             self.user.enabled = False
             self.user.save()
-            asyncio.run(routes.send_reset_mail(self.user.mail))
+            self.loop.run_until_complete(routes.send_reset_mail(self.user.mail))
             self.user.enabled = True
             self.user.oip = "provider"
             self.user.save()
-            asyncio.run(routes.send_reset_mail(self.user.mail))
+            self.loop.run_until_complete(routes.send_reset_mail(self.user.mail))
         send.assert_not_awaited()
         self.assertEqual(PasswordReset.select().count(), 0)
 
@@ -206,7 +211,7 @@ class RecoveryTests(unittest.TestCase):
             with self.subTest(change=change):
                 self.session["csrf_token"] = "valid-token"
                 current = User.get_by_id(self.user.uuid)
-                old_session = {"user": asyncio.run(current.to_json())}
+                old_session = {"user": self.loop.run_until_complete(current.to_json())}
                 token = PasswordReset.issue(current)
                 if change == "reset":
                     self.reset(token)
@@ -216,7 +221,7 @@ class RecoveryTests(unittest.TestCase):
                 with patch.object(factory, "session", old_session), patch.object(factory, "g", state):
                     with patch.object(factory, "request", types.SimpleNamespace(url="https://funding.example/")):
                         with patch.object(User, "by_uuid", return_value=User.get_by_id(self.user.uuid)):
-                            asyncio.run(hook())
+                            self.loop.run_until_complete(hook())
                 self.assertEqual(old_session, {})
                 self.assertTrue(state.user.is_anon)
 
@@ -225,20 +230,23 @@ class RecoveryTests(unittest.TestCase):
         hook = app.before_request_funcs[None][0]
         for valid in (True, False):
             current = User.get_by_id(self.user.uuid)
-            data = asyncio.run(current.to_json()) if valid else {"uuid": current.uuid}
+            data = self.loop.run_until_complete(current.to_json()) if valid else {"uuid": current.uuid}
             state = types.SimpleNamespace()
             session = {"user": data}
             with patch.object(factory, "session", session), patch.object(factory, "g", state):
                 with patch.object(factory, "request", types.SimpleNamespace(url="https://funding.example/")):
                     with patch.object(User, "by_uuid", return_value=current):
-                        asyncio.run(hook())
+                        self.loop.run_until_complete(hook())
             self.assertEqual(not state.user.is_anon, valid)
 
     def test_registration_stores_a_session_version_that_matches_database(self):
         self.session["captcha"] = "abcd"
         data = types.SimpleNamespace(username="new-user", email="new@example.com",
                                      password="new-password", captcha="abcd")
-        self.call(routes.register_post.__wrapped__, data)
+        # SID rotation is exercised with real HTTP cookies in test_login_sessions.
+        with patch.object(routes, "rotate_session", AsyncMock()) as rotate:
+            self.call(routes.register_post.__wrapped__, data)
+        rotate.assert_awaited_once()
         saved = User.get(User.username == data.username)
         self.assertEqual(self.session["user"]["password_version"], saved.password_version)
 

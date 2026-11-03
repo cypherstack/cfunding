@@ -20,6 +20,20 @@ from funding.utils.mail import send_mail, mail_enabled
 bp_auth = Blueprint('bp_auth', __name__)
 
 
+async def rotate_session():
+    # quart-session 1.0.4 has no regenerate API. Delete before authenticating.
+    interface = app.session_interface
+    await interface.delete(key=interface.key_prefix + session.sid,
+                           app=app._get_current_object())
+    session.clear()
+    session.sid = secrets.token_urlsafe(32)
+    session.permanent = interface.permanent
+    # The stale-password hook may have cleared the original session metadata.
+    session.addr = (request.headers.get('X-Forwarded-For')
+                    if app.config.get('SESSION_REVERSE_PROXY', False)
+                    else request.remote_addr)
+
+
 @bp_auth.route("/auth/login/", methods=['GET', 'POST'])
 async def login():
     if settings.OPENID_CFG:
@@ -38,6 +52,7 @@ async def login():
             if not user.enabled:
                 await flash("user is disabled")
                 return await render_template("login.html")
+            await rotate_session()
             session['user'] = await user.to_json()
             await flash("Successful log-in")
             return redirect(url_for('bp_routes.root'))
@@ -299,6 +314,7 @@ async def register_post(data: UserRegisterForm):
         role=UserRole.admin if user_count == 0 else UserRole.user
     )
 
+    await rotate_session()
     session['user'] = await user.to_json()
     await flash(f"Welcome {user.username}!")
     return redirect(url_for('bp_routes.root'))
