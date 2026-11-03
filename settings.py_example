@@ -49,6 +49,20 @@ COIN_RPC_AUTH = os.environ.get("COIN_RPC_AUTH", None)
 VIEW_COUNTER = bool_env(os.environ.get("VIEW_COUNTER", 'true'))
 CAPTCHA_TTF = os.environ.get("CAPTCHA_TTF", "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf")
 
+URL_SCHEME = os.environ.get("URL_SCHEME", "https")
+
+MAIL_ENABLED = bool_env(os.environ.get("MAIL_ENABLED", "false"))
+MAIL_FROM = os.environ.get("MAIL_FROM", "")
+SMTP_HOST = os.environ.get("SMTP_HOST", "smtp.mailgun.org")
+SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
+SMTP_USER = os.environ.get("SMTP_USER", "")
+SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
+SMTP_STARTTLS = bool_env(os.environ.get("SMTP_STARTTLS", "true"))
+SMTP_SSL = bool_env(os.environ.get("SMTP_SSL", "false"))
+SMTP_TIMEOUT = int(os.environ.get("SMTP_TIMEOUT", "10"))
+
+PASSWORD_RESET_TTL = int(os.environ.get("PASSWORD_RESET_TTL", "3600"))
+
 OPENID_CFG = None
 # OPENID_CFG = {
 #     "client_id": "",

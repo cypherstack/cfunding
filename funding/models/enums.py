@@ -13,6 +13,7 @@ class ProposalCategory(Enum):
     core = 2
     misc = 3
     design = 4
+    committee = 5
 
     @staticmethod
     def lookup():
@@ -21,7 +22,8 @@ class ProposalCategory(Enum):
             1: "Marketing",
             2: "Core",
             3: "Miscellaneous",
-            4: "Design"
+            4: "Design",
+            5: "Committee"
         }
 
     @staticmethod

@@ -1,0 +1,62 @@
+{% extends "layouts/base-fullscreen.html" %}
+
+{% block title %} Forgot password {% endblock %}
+
+{% block content %}
+
+<div class="bg-light min-vh-100 d-flex flex-row align-items-center">
+  <div class="container">
+    <div class="row justify-content-center">
+      <div class="col-lg-6">
+        {% with messages = get_flashed_messages() %}
+        {% if messages %}
+          <div class="row">
+          {% for message in messages %}
+            <div class="alert alert-info mt-3" role="alert">
+              {{message}}
+            </div>
+          {% endfor %}
+          </div>
+        {% endif %}
+        {% endwith %}
+
+        <div class="card p-4">
+          <div class="card-body">
+            <form method="POST">
+              <h1>Forgot password</h1>
+              <p class="text-medium-emphasis">
+                Enter the email address you registered with and we will send you
+                a link to choose a new password.
+              </p>
+              <div class="input-group mb-3"><span class="input-group-text">
+                  <svg class="icon">
+                    <use xlink:href="/static/admin/vendors/@coreui/icons/svg/free.svg#cil-envelope-closed"></use>
+                  </svg></span>
+                <input class="form-control" value="{{email if email else ''}}" name="email" type="email" placeholder="Email">
+              </div>
+              <img class="mb-3" src="{{url_for('bp_routes.utils_captcha')}}"/>
+              <div class="input-group mb-3"><span class="input-group-text">
+                  <svg class="icon">
+                    <use xlink:href="/static/admin/vendors/@coreui/icons/svg/free.svg#cil-text"></use>
+                  </svg></span>
+                <input class="form-control" name="captcha" type="captcha" placeholder="Captcha">
+              </div>
+              <div class="row">
+                <div class="col-6">
+                  <button class="btn btn-dark px-4" type="submit">Send reset link</button>
+                </div>
+                <div class="col-6 text-end">
+                  <a href="{{ url_for('bp_auth.login') }}">
+                    <button class="btn btn-link px-0" type="button">Back to login</button>
+                  </a>
+                </div>
+              </div>
+            </form>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% endblock content %}

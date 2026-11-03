@@ -3,6 +3,7 @@ from typing import List, Set, Optional, Union
 from datetime import datetime
 import json
 import aiohttp
+import secrets
 import timeago
 from quart import jsonify
 from peewee import PostgresqlDatabase, SqliteDatabase, ProgrammingError
@@ -259,6 +260,12 @@ async def _setup_settings(app: Quart):
             raise Exception("DISCOURSE_API_KEY not set.")
         settings.DISCOURSE_DOMAIN = settings.DISCOURSE_DOMAIN.replace("/", "")
 
+    if getattr(settings, "MAIL_ENABLED", False):
+        if not getattr(settings, "MAIL_FROM", ""):
+            raise Exception("MAIL_FROM not set. e.g: noreply@mg.domain.org")
+        if not getattr(settings, "SMTP_HOST", ""):
+            raise Exception("SMTP_HOST not set. e.g: smtp.mailgun.org")
+
     if isinstance(settings.OPENID_CFG, dict):
         for needle in ['client_id', 'client_secret', 'configuration']:
             if needle not in settings.OPENID_CFG:
@@ -354,6 +361,9 @@ def create_app():
         if settings.OPENID_CFG:
             data['url_login'] = openid.endpoint_name_login
 
+        if g.user.is_admin:
+            data['csrf_token'] = session.setdefault('csrf_token', secrets.token_urlsafe(32))
+
         return dict(year=now.year, **data)
 
     @app.errorhandler(RequestSchemaValidationError)
@@ -400,6 +410,8 @@ def create_app():
         try:
             user = User.by_uuid(ses['uuid'])
             if not user or not user.enabled:
+                raise Exception("clear session")
+            if not settings.OPENID_CFG and ses.get('password_version') != user.password_version:
                 raise Exception("clear session")
             g.user = user
         except:

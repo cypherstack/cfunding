@@ -1,0 +1,56 @@
+{% extends "layouts/base-fullscreen.html" %}
+
+{% block title %} Choose a new password {% endblock %}
+
+{% block content %}
+
+<div class="bg-light min-vh-100 d-flex flex-row align-items-center">
+  <div class="container">
+    <div class="row justify-content-center">
+      <div class="col-lg-6">
+        {% with messages = get_flashed_messages() %}
+        {% if messages %}
+          <div class="row">
+          {% for message in messages %}
+            <div class="alert alert-info mt-3" role="alert">
+              {{message}}
+            </div>
+          {% endfor %}
+          </div>
+        {% endif %}
+        {% endwith %}
+
+        <div class="card p-4">
+          <div class="card-body">
+            <form method="POST" action="{{ url_for('bp_auth.reset', token=token) }}">
+              <h1>Choose a new password</h1>
+              <p class="text-medium-emphasis">
+                This link can be used once. Pick a password of more than five
+                characters.
+              </p>
+              <div class="input-group mb-3"><span class="input-group-text">
+                  <svg class="icon">
+                    <use xlink:href="/static/admin/vendors/@coreui/icons/svg/free.svg#cil-lock-locked"></use>
+                  </svg></span>
+                <input class="form-control" name="password" type="password" placeholder="New password">
+              </div>
+              <div class="input-group mb-3"><span class="input-group-text">
+                  <svg class="icon">
+                    <use xlink:href="/static/admin/vendors/@coreui/icons/svg/free.svg#cil-lock-locked"></use>
+                  </svg></span>
+                <input class="form-control" name="password_confirm" type="password" placeholder="Repeat new password">
+              </div>
+              <div class="row">
+                <div class="col-12">
+                  <button class="btn btn-dark px-4" type="submit">Set password</button>
+                </div>
+              </div>
+            </form>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% endblock content %}
