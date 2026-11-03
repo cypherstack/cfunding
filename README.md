@@ -78,6 +78,16 @@ And set `settings.py` options:
 - Set `COIN_RPC_PORT` to `18888`
 - Set `COIN_RPC_AUTH` to `'admin,admin'`
 
+## Tests
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
+The authorization regression tests use the actual proposal methods with fake
+ORM, wallet and forum dependencies, and need only the Python standard library.
+They do not replace HTTP/database integration tests.
+
 ## License
 
 MIT

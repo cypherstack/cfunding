@@ -362,11 +362,16 @@ class Proposal(pw.Model):
         except Exception as ex:
             app.logger.error(f"Discourse new_topic error: {ex}")
 
-    def set_discourse_topic_id(self, topic_id: int, user: User):
+    def check_discourse_topic_id_permission(self, topic_id: Optional[int], user: User = None):
         if not isinstance(topic_id, int) or topic_id == self.discourse_topic_id:
             return
-        if not user.is_moderator:
+        if not user or not user.is_moderator:
             raise Exception("insufficient permissions to change 'discourse_topic_id'")
+
+    def set_discourse_topic_id(self, topic_id: int, user: User):
+        self.check_discourse_topic_id_permission(topic_id, user)
+        if not isinstance(topic_id, int) or topic_id == self.discourse_topic_id:
+            return
         self.discourse_topic_id = topic_id
         self.modified = datetime.now()
 
@@ -495,7 +500,7 @@ class Proposal(pw.Model):
 
     async def generate_discourse_topic(self, topic_id: Optional[int], user=None):
         if isinstance(topic_id, int) and topic_id != self.discourse_topic_id:
-            self.discourse_topic_id = topic_id
+            self.set_discourse_topic_id(topic_id, user)
             self._events.append(Event(message="Discourse topic id changed", proposal=self, user=user))
             return
         if not settings.DISCOURSE_ENABLED or isinstance(self.discourse_topic_id, int):
@@ -535,6 +540,9 @@ class Proposal(pw.Model):
         if user.is_anon or (
                 not user.is_moderator and proposal.user.username != user.username):
             raise Exception("insufficient permissions.")
+
+        # Reject forged associations before applying changes or invoking their side effects.
+        proposal.check_discourse_topic_id_permission(data.discourse_topic_id, user)
 
         proposal.title = data.title
         if proposal._is_new:
