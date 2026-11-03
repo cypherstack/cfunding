@@ -86,7 +86,24 @@ python3 -m unittest discover -s tests -v
 
 The authorization regression tests use the actual proposal methods with fake
 ORM, wallet and forum dependencies, and need only the Python standard library.
-They do not replace HTTP/database integration tests.
+The cache tests import the real helper and route modules in isolated test
+namespaces, use temporary files and real QR/PNG rendering, and mock HTTP and
+unrelated application dependencies. They require `aiohttp`, `Pillow`, `PyQRCode`
+and `pypng` from the application's dependencies. No database, wallet or live
+Gravatar connection is needed. These are not full HTTP/database integration tests.
+
+### Image cache safety
+
+Gravatar accepts only 32-character hexadecimal MD5 hashes (normalized to
+lowercase); malformed hashes fall back to the default avatar. Downloads must
+have an image response type and fit within 1 MiB, including streamed bodies.
+QR addresses must be ASCII alphanumeric and match the configured coin's address
+length policy; this is not checksum/RPC validation. Invalid QR input returns 400.
+Both caches reject destination symlinks and use contained, atomic file writes.
+Explicit QR output paths must also stay inside the QR cache directory.
+
+This does not impose a total cache quota or request-rate limit, change the
+service user, or remove existing cache files.
 
 ## License
 

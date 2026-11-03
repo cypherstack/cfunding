@@ -6,6 +6,7 @@ import pyqrcode
 from PIL import Image, ImageDraw
 
 from funding.utils import validate_crypto_address
+from funding.utils.cache import cache_file_path, write_cache_file
 import settings
 
 QR_LOCK = asyncio.Lock()
@@ -23,11 +24,14 @@ class QrCodeGenerator:
         if not os.path.exists(self.base):
             os.mkdir(self.base)
 
+    def cache_path(self, address):
+        if not isinstance(address, str) or not address.isascii() or \
+                not address.isalnum() or not validate_crypto_address(address):
+            raise ValueError('Invalid QR address')
+        return cache_file_path(self.base, f'{address}.png')
+
     def exists(self, address):
-        if not os.path.exists(self.base):
-            os.mkdir(self.base)
-        if os.path.exists(os.path.join(self.base, '%s.png' % address)):
-            return True
+        return os.path.isfile(self.cache_path(address))
 
     def create(self, address, dest=None,
                color_from=(170,43,43),
@@ -40,11 +44,12 @@ class QrCodeGenerator:
         :param color_to:  gradient to color
         :return:
         """
-        if not validate_crypto_address(address):
-            raise Exception(f'faulty address length')
-
-        if not dest:
-            dest = os.path.join(self.base, f'{address}.png')
+        destination = self.cache_path(address)
+        if dest is not None:
+            candidate = cache_file_path(self.base, os.path.basename(dest))
+            if os.path.realpath(dest) != candidate:
+                raise ValueError('QR destination must remain inside its cache directory')
+            destination = candidate
 
         created = pyqrcode.create(address, error='L')
         buffer = BytesIO()
@@ -68,8 +73,9 @@ class QrCodeGenerator:
                 continue
 
         if not color_from and not color_to:
-            im.save(dest, **self.pil_save_options)
-            return dest
+            output = BytesIO()
+            im.save(output, format='PNG', **self.pil_save_options)
+            return write_cache_file(self.base, os.path.basename(destination), output.getvalue())
 
         # turn QR into a gradient
         im.putdata(im_transparent)
@@ -81,9 +87,9 @@ class QrCodeGenerator:
             draw.line([(i, 0), (0, i)], tuple(color), width=1)
 
         im_gradient = Image.alpha_composite(gradient, im)
-        im_gradient.save(dest, **self.pil_save_options)
-
-        return dest
+        output = BytesIO()
+        im_gradient.save(output, format='PNG', **self.pil_save_options)
+        return write_cache_file(self.base, os.path.basename(destination), output.getvalue())
 
     @staticmethod
     def gradient_interpolate(color_from, color_to, interval):

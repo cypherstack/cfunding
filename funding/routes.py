@@ -20,7 +20,8 @@ from funding.utils import get_ip
 from funding.utils.qr import QrCodeGenerator, QR_LOCK
 from funding.utils.crumbs import *
 from funding.utils.markdown import generate_html
-from funding.utils.gravatar import gravatar_download
+from funding.utils.gravatar import gravatar_download, gravatar_filename
+from funding.utils.cache import cache_file_path
 from funding.models.database import User, Proposal, ProposalStatus, ProposalCategory
 
 bp_routes = Blueprint('bp_routes', __name__)
@@ -216,9 +217,14 @@ async def utils_qr_image(address: str):
     :param address: valid receiving address
     :return:
     """
+    qr = QrCodeGenerator()
+    try:
+        qr.cache_path(address)
+    except ValueError:
+        abort(400)
+
     async with QR_LOCK:
         cache = current_app.session_interface
-        qr = QrCodeGenerator()
         if not qr.exists(address):
             # create a new QR code
             ip = get_ip()
@@ -243,11 +249,10 @@ async def utils_qr_image(address: str):
 async def utils_gravatar(hash: str = None):
     """:return: path to image"""
     _dir = os.path.join(current_app.static_folder, "gravatar")
-    fn = f"{hash}.png"
-    dest = os.path.join(_dir, fn)
-
     try:
-        if not os.path.exists(dest):
+        fn = gravatar_filename(hash)
+        dest = cache_file_path(_dir, fn)
+        if not os.path.isfile(dest):
             await gravatar_download(
                 hash=hash,
                 save_to_dir=_dir,
@@ -258,6 +263,9 @@ async def utils_gravatar(hash: str = None):
             file_name=fn
         )
 
+    except ValueError:
+        # Missing/malformed hashes and unsafe cache entries use the default avatar.
+        pass
     except Exception as ex:
         current_app.logger.error(f"Unable to fetch gravatar image: {ex}")
 
