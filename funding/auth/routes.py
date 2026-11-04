@@ -1,4 +1,5 @@
 import bcrypt
+import secrets
 
 import peewee
 from quart import session, redirect, url_for, Blueprint, render_template, request, abort, flash
@@ -10,13 +11,27 @@ from email_validator import validate_email, EmailNotValidError
 
 import settings
 from funding import login_required, admin_required, moderator_required
-from funding.factory import openid
+from funding.factory import openid, database
 from funding.auth.models import UserRegisterForm
 from funding.models.database import User, PasswordReset, UserRole
 from funding.utils.mail import send_mail, mail_enabled
 
 
 bp_auth = Blueprint('bp_auth', __name__)
+
+
+async def rotate_session():
+    # quart-session 1.0.4 has no regenerate API. Delete before authenticating.
+    interface = app.session_interface
+    await interface.delete(key=interface.key_prefix + session.sid,
+                           app=app._get_current_object())
+    session.clear()
+    session.sid = secrets.token_urlsafe(32)
+    session.permanent = interface.permanent
+    # The stale-password hook may have cleared the original session metadata.
+    session.addr = (request.headers.get('X-Forwarded-For')
+                    if app.config.get('SESSION_REVERSE_PROXY', False)
+                    else request.remote_addr)
 
 
 @bp_auth.route("/auth/login/", methods=['GET', 'POST'])
@@ -37,6 +52,7 @@ async def login():
             if not user.enabled:
                 await flash("user is disabled")
                 return await render_template("login.html")
+            await rotate_session()
             session['user'] = await user.to_json()
             await flash("Successful log-in")
             return redirect(url_for('bp_routes.root'))
@@ -69,8 +85,34 @@ RESET_SENT_MESSAGE = ("If that email address belongs to an account, a reset "
 
 def reset_link(token: str) -> str:
     scheme = getattr(settings, "URL_SCHEME", "https")
-    path = url_for('bp_auth.reset', token=token)
+    path = url_for('bp_auth.reset', token=token, _external=False)
     return f"{scheme}://{settings.DOMAIN}{path}"
+
+
+async def send_reset_mail(email: str):
+    user = None
+    try:
+        user = User.select().where(User.mail == email).get()
+    except peewee.DoesNotExist:
+        pass
+
+    if user and user.enabled and not user.oip:
+        token = PasswordReset.issue(user)
+        if token:
+            try:
+                await send_mail(
+                    user.mail,
+                    RESET_SUBJECT.format(domain=settings.DOMAIN),
+                    RESET_BODY.format(
+                        username=user.username,
+                        domain=settings.DOMAIN,
+                        link=reset_link(token),
+                        minutes=int(PasswordReset.ttl() / 60)
+                    )
+                )
+            except Exception as ex:
+                PasswordReset.revoke(token)
+                app.logger.error(f"PASSWORD_RESET_MAIL_FAILED: {ex}")
 
 
 @bp_auth.route("/auth/forgot/", methods=['GET', 'POST'])
@@ -97,33 +139,13 @@ async def forgot():
     session.pop('captcha', None)
 
     try:
-        validate_email(email, check_deliverability=False)
+        validated = validate_email(email, check_deliverability=False)
+        email = getattr(validated, 'normalized', None) or validated.email
     except EmailNotValidError:
         await flash(RESET_SENT_MESSAGE)
         return await render_template("forgot.html")
 
-    user = None
-    try:
-        user = User.select().where(User.mail == email).get()
-    except peewee.DoesNotExist:
-        pass
-
-    if user and user.enabled and not user.oip and PasswordReset.may_request(user):
-        token = PasswordReset.issue(user)
-        try:
-            await send_mail(
-                user.mail,
-                RESET_SUBJECT.format(domain=settings.DOMAIN),
-                RESET_BODY.format(
-                    username=user.username,
-                    domain=settings.DOMAIN,
-                    link=reset_link(token),
-                    minutes=int(PasswordReset.ttl() / 60)
-                )
-            )
-        except Exception as ex:
-            app.logger.error(f"PASSWORD_RESET_MAIL_FAILED: {ex}")
-
+    app.add_background_task(send_reset_mail, email)
     await flash(RESET_SENT_MESSAGE)
     return await render_template("forgot.html")
 
@@ -149,7 +171,7 @@ async def reset(token: str):
     password = blob.get('password', '')
     confirm = blob.get('password_confirm', '')
 
-    if len(password) <= 4:
+    if len(password) <= 5:
         await flash("Password length must exceed 5 characters")
         return await render_template("reset.html", token=token)
 
@@ -157,12 +179,16 @@ async def reset(token: str):
         await flash("Passwords do not match")
         return await render_template("reset.html", token=token)
 
-    user = PasswordReset.consume(token)
+    password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+
+    with database.atomic():
+        user = PasswordReset.consume(token)
+        if user:
+            user.password = password_hash
+            user.save(only=[User.password])
+
     if not user:
         return await render_template("error.html", message=expired, code=404), 404
-
-    user.password = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
-    user.save()
 
     session.clear()
     await flash("Password changed. Please log in.")
@@ -178,14 +204,20 @@ async def user_password_set(name: str):
         return abort(404)
 
     blob = await request.form
+    csrf_token = blob.get('csrf_token', '')
+    if not csrf_token or not secrets.compare_digest(
+            csrf_token.encode(), session.get('csrf_token', '').encode()):
+        return abort(403)
     password = blob.get('password', '')
 
-    if len(password) <= 4:
+    if len(password) <= 5:
         await flash("Password length must exceed 5 characters")
         return redirect(url_for('bp_routes.user_page', name=name))
 
     user.password = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
-    user.save()
+    with database.atomic():
+        user.save(only=[User.password])
+        PasswordReset.revoke_user(user.uuid)
 
     await flash(f"Password set for user '{user.username}'")
     return redirect(url_for('bp_routes.user_page', name=name))
@@ -262,7 +294,7 @@ async def register_post(data: UserRegisterForm):
         await flash("Invalid captcha!")
         return await render_template('register.html', username=data.username, password=data.password, email=data.email)
 
-    if len(data.password) <= 4:
+    if len(data.password) <= 5:
         await flash("Password length must exceed 5 characters")
         return await render_template('register.html', username=data.username, password=data.password, email=data.email)
 
@@ -274,7 +306,7 @@ async def register_post(data: UserRegisterForm):
         pass
 
     user_count = User.select().count()
-    hashed = bcrypt.hashpw(data.password.encode(), bcrypt.gensalt())
+    hashed = bcrypt.hashpw(data.password.encode(), bcrypt.gensalt()).decode()
     user = User.create(
         username=data.username,
         password=hashed,
@@ -282,6 +314,7 @@ async def register_post(data: UserRegisterForm):
         role=UserRole.admin if user_count == 0 else UserRole.user
     )
 
+    await rotate_session()
     session['user'] = await user.to_json()
     await flash(f"Welcome {user.username}!")
     return redirect(url_for('bp_routes.root'))

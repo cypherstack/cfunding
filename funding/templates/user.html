@@ -87,6 +87,7 @@
                 </form>
 
                 <form method="POST" action="{{ url_for('bp_auth.user_password_set', name=u.username) }}" class="form-inline mb-2">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                   <div class="input-group input-group-sm">
                     <input class="form-control" name="password" type="password" placeholder="New password" required>
                     <button type="submit" class="btn btn-sm btn-warning">set password</button>

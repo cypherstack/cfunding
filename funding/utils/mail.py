@@ -1,5 +1,6 @@
 import asyncio
 import smtplib
+import ssl
 from email.message import EmailMessage
 
 import settings
@@ -25,13 +26,13 @@ def _send_blocking(msg: EmailMessage) -> None:
     timeout = int(cfg("SMTP_TIMEOUT", 10))
 
     if cfg("SMTP_SSL", False):
-        server = smtplib.SMTP_SSL(host, port, timeout=timeout)
+        server = smtplib.SMTP_SSL(host, port, timeout=timeout, context=ssl.create_default_context())
     else:
         server = smtplib.SMTP(host, port, timeout=timeout)
 
     with server:
         if cfg("SMTP_STARTTLS", True) and not cfg("SMTP_SSL", False):
-            server.starttls()
+            server.starttls(context=ssl.create_default_context())
         user = cfg("SMTP_USER")
         if user:
             server.login(user, cfg("SMTP_PASSWORD", ""))

@@ -80,11 +80,16 @@ class User(pw.Model):
         except:
             pass
 
+    @property
+    def password_version(self):
+        return hashlib.sha256(self.password.encode()).hexdigest()
+
     async def to_json(self):
         return {
             "uuid": self.uuid,
             "username": self.username,
             "mail": self.mail,
+            "password_version": self.password_version if self.password else None,
             "role": self.role.value,
             "mail_md5": hashlib.md5(self.mail.encode()).hexdigest()
         }
@@ -124,14 +129,38 @@ class PasswordReset(pw.Model):
         return count < PasswordReset.RATE_MAX
 
     @staticmethod
-    def issue(user: 'User') -> str:
+    def issue(user: 'User') -> Optional[str]:
+        from funding.factory import database
         token = secrets.token_urlsafe(32)
-        PasswordReset.create(
-            user=user,
-            token_hash=PasswordReset.hash_token(token),
-            expires=datetime.now() + timedelta(seconds=PasswordReset.ttl())
-        )
+        with database.atomic():
+            lock = User.select().where(User.uuid == user.uuid)
+            if database.for_update:
+                lock = lock.for_update()
+            lock.first()
+
+            if not PasswordReset.may_request(user):
+                return None
+
+            PasswordReset.create(
+                user=user,
+                token_hash=PasswordReset.hash_token(token),
+                expires=datetime.now() + timedelta(seconds=PasswordReset.ttl())
+            )
         return token
+
+    @staticmethod
+    def revoke(token: str) -> None:
+        if not token:
+            return
+        PasswordReset.delete().where(
+            PasswordReset.token_hash == PasswordReset.hash_token(token)
+        ).execute()
+
+    @staticmethod
+    def revoke_user(user_id) -> None:
+        PasswordReset.update(used=datetime.now()).where(
+            (PasswordReset.user == user_id) & PasswordReset.used.is_null(True)
+        ).execute()
 
     @staticmethod
     def resolve(token: str) -> Optional['User']:
@@ -154,33 +183,35 @@ class PasswordReset(pw.Model):
 
     @staticmethod
     def consume(token: str) -> Optional['User']:
+        from funding.factory import database
         if not token:
             return None
 
-        now = datetime.now()
         token_hash = PasswordReset.hash_token(token)
 
-        claimed = PasswordReset.update(used=now).where(
-            (PasswordReset.token_hash == token_hash) &
-            PasswordReset.used.is_null(True) &
-            (PasswordReset.expires > now)
-        ).execute()
+        with database.atomic():
+            row = PasswordReset.select().where(PasswordReset.token_hash == token_hash).first()
+            if row is None:
+                return None
+            lock = User.select().where(User.uuid == row.user_id)
+            if database.for_update:
+                lock = lock.for_update()
+            user = lock.get()
+            if not user.enabled or user.oip:
+                return None
 
-        if claimed != 1:
-            return None
+            now = datetime.now()
+            claimed = PasswordReset.update(used=now).where(
+                (PasswordReset.token_hash == token_hash) &
+                PasswordReset.used.is_null(True) &
+                (PasswordReset.expires > now)
+            ).execute()
 
-        row = PasswordReset.select().where(
-            PasswordReset.token_hash == token_hash
-        ).get()
+            if claimed != 1:
+                return None
 
-        PasswordReset.update(used=now).where(
-            (PasswordReset.user == row.user_id) &
-            PasswordReset.used.is_null(True)
-        ).execute()
+            PasswordReset.revoke_user(user.uuid)
 
-        user = row.user
-        if not user or not user.enabled or user.oip:
-            return None
         return user
 
 
@@ -544,16 +575,14 @@ class Proposal(pw.Model):
         # Reject forged associations before applying changes or invoking their side effects.
         proposal.check_discourse_topic_id_permission(data.discourse_topic_id, user)
 
+        blob = await crypto_provider.check_address(data.addr_receiving)
+        if not isinstance(blob, dict) or not (
+                blob.get('isvalid') is True or blob.get('isvalidSpark') is True):
+            raise Exception("Invalid Address")
+
         proposal.title = data.title
         if proposal._is_new:
             proposal.slug = proposal.generate_slug(data.title)
-
-        blob = await crypto_provider.check_address(data.addr_receiving)
-        if data.addr_receiving[0] == 'a' and not blob['isvalid']:
-             raise Exception("Invalid Address")
-
-        elif data.addr_receiving[0] == 's' and not blob['isvalidSpark']:
-             raise Exception("Invalid Spark Address")
 
         proposal.set_addr_receiving(data.addr_receiving, user)
         await proposal.set_category(data.category, user)
